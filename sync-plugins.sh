@@ -33,7 +33,11 @@ with open(installed_path) as f:
     installed = json.load(f)
 
 # 区分真正的 marketplace 和单插件仓库
-# 真正的 marketplace: 目录内含 .claude-plugin/marketplace.json
+# 真正的 marketplace:
+#   - 没有 .git 目录: Claude Code 原生安装的 (如 claude-plugins-official)
+#   - 有 .git 目录且 marketplace.json 被 git 追踪: 仓库原生自带 (如 academic-research-skills)
+# 单插件仓库: 有 .git 目录但 marketplace.json 不被 git 追踪 (我们本地生成的)
+import subprocess
 marketplaces_dir = os.path.join(plugins_dir, 'marketplaces')
 real_marketplaces = {}
 for name, info in known.items():
@@ -42,7 +46,17 @@ for name, info in known.items():
         mp_dir = info.get('installLocation', '')
         mj = os.path.join(mp_dir, '.claude-plugin', 'marketplace.json')
         if os.path.isfile(mj):
-            real_marketplaces[name] = source['repo']
+            git_dir = os.path.join(mp_dir, '.git')
+            if not os.path.exists(git_dir):
+                # 没有 .git = Claude Code 原生安装，一定是真 marketplace
+                real_marketplaces[name] = source['repo']
+            else:
+                # 有 .git = 我们 clone 的，检查 marketplace.json 是否被 git 追踪
+                ret = subprocess.run(
+                    ['git', '-C', mp_dir, 'ls-files', '--error-unmatch', '.claude-plugin/marketplace.json'],
+                    capture_output=True)
+                if ret.returncode == 0:
+                    real_marketplaces[name] = source['repo']
 
 seen = set()
 plugins = []
@@ -282,22 +296,9 @@ for name, repo in marketplaces.items():
             'installLocation': path,
             'lastUpdated': now,
         }
-# 独立 Git 插件 - 注册到 known_marketplaces.json (本地已有 marketplace.json)
-for p in git_plugins:
-    name = p['name']
-    path = os.path.join(marketplaces_dir, name)
-    mj = os.path.join(path, '.claude-plugin', 'marketplace.json')
-    if os.path.isdir(path) and os.path.isfile(mj):
-        url = p.get('git_url', '')
-        repo = ''
-        if 'github.com/' in url:
-            repo = url.split('github.com/')[-1].replace('.git', '')
-        if repo:
-            known[name] = {
-                'source': {'source': 'github', 'repo': repo},
-                'installLocation': path,
-                'lastUpdated': now,
-            }
+# 独立 Git 插件不注册到 known_marketplaces.json
+# Claude Code 的 "source: github" 会强制从 GitHub API 验证 marketplace.json
+# 第三方仓库没有此文件会报错，但不影响插件加载 (通过 installed_plugins.json + enabledPlugins 生效)
 with open(os.path.join(plugins_dir, 'known_marketplaces.json'), 'w') as f:
     json.dump(known, f, indent=2)
 ok(f'{len(known)} 个 ({len(marketplaces)} marketplace + {len(git_plugins)} 独立插件)')
