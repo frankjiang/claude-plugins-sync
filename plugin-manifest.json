@@ -1,58 +1,65 @@
 {
-  "version": 1,
+  "version": 2,
   "marketplaces": {
     "claude-plugins-official": "anthropics/claude-plugins-official",
-    "academic-research-skills": "Imbad0202/academic-research-skills",
-    "mattpocock-skills": "mattpocock/skills"
+    "academic-research-skills": "Imbad0202/academic-research-skills"
   },
   "plugins": [
     {
       "name": "code-review",
       "marketplace": "claude-plugins-official",
       "version": "unknown",
-      "scope": "project"
+      "scope": "project",
+      "git_url": ""
     },
     {
       "name": "frontend-design",
       "marketplace": "claude-plugins-official",
       "version": "unknown",
-      "scope": "user"
+      "scope": "user",
+      "git_url": ""
     },
     {
       "name": "github",
       "marketplace": "claude-plugins-official",
       "version": "unknown",
-      "scope": "user"
+      "scope": "user",
+      "git_url": ""
     },
     {
       "name": "code-simplifier",
       "marketplace": "claude-plugins-official",
       "version": "1.0.0",
-      "scope": "user"
+      "scope": "user",
+      "git_url": ""
     },
     {
       "name": "skill-creator",
       "marketplace": "claude-plugins-official",
       "version": "unknown",
-      "scope": "user"
+      "scope": "user",
+      "git_url": ""
     },
     {
       "name": "academic-research-skills",
       "marketplace": "academic-research-skills",
       "version": "3.9.4.1",
-      "scope": "user"
+      "scope": "user",
+      "git_url": ""
     },
     {
       "name": "superpowers",
       "marketplace": "claude-plugins-official",
       "version": "5.1.0",
-      "scope": "user"
+      "scope": "user",
+      "git_url": ""
     },
     {
       "name": "mattpocock-skills",
       "marketplace": "mattpocock-skills",
       "version": "unknown",
-      "scope": "user"
+      "scope": "user",
+      "git_url": "https://github.com/mattpocock/skills.git"
     }
   ]
 }
