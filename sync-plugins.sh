@@ -291,7 +291,7 @@ for p in git_plugins:
         url = p.get('git_url', '')
         repo = ''
         if 'github.com/' in url:
-            repo = url.split('github.com/')[-1].removesuffix('.git')
+            repo = url.split('github.com/')[-1].replace('.git', '')
         if repo:
             known[name] = {
                 'source': {'source': 'github', 'repo': repo},
