@@ -127,6 +127,28 @@ for name, repo in marketplaces.items():
         else:
             fail(f'{name}: {ret.stderr.strip()}')
 
+# --- 1.5 确保每个 marketplace 都有 marketplace.json ---
+for name in marketplaces:
+    dest = os.path.join(marketplaces_dir, name)
+    mj = os.path.join(dest, '.claude-plugin', 'marketplace.json')
+    pj = os.path.join(dest, '.claude-plugin', 'plugin.json')
+    if os.path.isdir(dest) and not os.path.isfile(mj) and os.path.isfile(pj):
+        with open(pj) as f:
+            meta = json.load(f)
+        plugin_name = meta.get('name', name)
+        mkt_data = {
+            'name': name,
+            'plugins': [{
+                'name': plugin_name,
+                'source': './',
+                'description': f'Auto-generated marketplace entry for {plugin_name}'
+            }]
+        }
+        os.makedirs(os.path.dirname(mj), exist_ok=True)
+        with open(mj, 'w') as f:
+            json.dump(mkt_data, f, indent=2)
+        ok(f'{name} {DIM}(补充 marketplace.json){RESET}')
+
 # --- 2. 生成 known_marketplaces.json ---
 header('2. 生成 known_marketplaces.json')
 known = {}
