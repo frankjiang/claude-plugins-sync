@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "marketplaces": {
+    "claude-plugins-official": "anthropics/claude-plugins-official",
+    "academic-research-skills": "Imbad0202/academic-research-skills",
+    "mattpocock-skills": "mattpocock/skills"
+  },
+  "plugins": [
+    {
+      "name": "code-review",
+      "marketplace": "claude-plugins-official",
+      "version": "unknown",
+      "scope": "project"
+    },
+    {
+      "name": "frontend-design",
+      "marketplace": "claude-plugins-official",
+      "version": "unknown",
+      "scope": "user"
+    },
+    {
+      "name": "github",
+      "marketplace": "claude-plugins-official",
+      "version": "unknown",
+      "scope": "user"
+    },
+    {
+      "name": "code-simplifier",
+      "marketplace": "claude-plugins-official",
+      "version": "1.0.0",
+      "scope": "user"
+    },
+    {
+      "name": "skill-creator",
+      "marketplace": "claude-plugins-official",
+      "version": "unknown",
+      "scope": "user"
+    },
+    {
+      "name": "academic-research-skills",
+      "marketplace": "academic-research-skills",
+      "version": "3.9.4.1",
+      "scope": "user"
+    },
+    {
+      "name": "superpowers",
+      "marketplace": "claude-plugins-official",
+      "version": "5.1.0",
+      "scope": "user"
+    },
+    {
+      "name": "mattpocock-skills",
+      "marketplace": "mattpocock-skills",
+      "version": "unknown",
+      "scope": "user"
+    }
+  ]
+}
