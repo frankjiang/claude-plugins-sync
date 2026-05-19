@@ -14,7 +14,7 @@ MARKETPLACES_DIR="${PLUGINS_DIR}/marketplaces"
 CACHE_DIR="${PLUGINS_DIR}/cache"
 
 do_export() {
-  python3 -c "
+  python3 << 'PYTHON'
 import json, os, sys
 
 plugins_dir = os.path.expanduser('~/.claude/plugins')
@@ -23,7 +23,7 @@ installed_path = os.path.join(plugins_dir, 'installed_plugins.json')
 
 for p in [known_path, installed_path]:
     if not os.path.isfile(p):
-        print(f'错误: 未找到 {p}', file=sys.stderr)
+        print(f'\033[31m错误: 未找到 {p}\033[0m', file=sys.stderr)
         sys.exit(1)
 
 with open(known_path) as f:
@@ -53,48 +53,82 @@ for key, entries in installed.get('plugins', {}).items():
     })
 
 manifest = {'version': 1, 'marketplaces': marketplaces, 'plugins': plugins}
-out = sys.argv[1]
+script_dir = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv[0] else '.'
+out = os.environ.get('MANIFEST_PATH', os.path.join(os.getcwd(), 'plugin-manifest.json'))
 with open(out, 'w') as f:
     json.dump(manifest, f, indent=2, ensure_ascii=False)
-print(f'✓ 已导出 {len(plugins)} 个插件到 {out}')
-" "$MANIFEST"
+print(f'\033[32m✓\033[0m 已导出 \033[1m{len(plugins)}\033[0m 个插件到 {out}')
+PYTHON
 }
 
 do_install() {
   if [ ! -f "$MANIFEST" ]; then
-    echo "错误: 未找到 plugin-manifest.json" >&2
+    echo -e "\033[31m错误: 未找到 plugin-manifest.json\033[0m" >&2
     exit 1
   fi
 
   mkdir -p "$MARKETPLACES_DIR" "$CACHE_DIR"
 
-  python3 -c "
-import json, os, subprocess, sys
+  python3 << 'PYTHON'
+import json, os, shutil, subprocess, sys
 from datetime import datetime, timezone
 
-with open(sys.argv[1]) as f:
-    manifest = json.load(f)
+# --- 颜色定义 ---
+GREEN = '\033[32m'
+RED = '\033[31m'
+YELLOW = '\033[33m'
+CYAN = '\033[36m'
+BOLD = '\033[1m'
+DIM = '\033[2m'
+RESET = '\033[0m'
 
+def ok(msg):
+    print(f'  {GREEN}✓{RESET} {msg}')
+
+def warn(msg):
+    print(f'  {YELLOW}⚠{RESET} {msg}')
+
+def fail(msg):
+    print(f'  {RED}✗{RESET} {msg}')
+
+def info(msg):
+    print(f'  {CYAN}→{RESET} {msg}')
+
+def header(msg):
+    print(f'\n{BOLD}{msg}{RESET}')
+
+# --- 加载 manifest ---
 home = os.path.expanduser('~')
 plugins_dir = os.path.join(home, '.claude/plugins')
 marketplaces_dir = os.path.join(plugins_dir, 'marketplaces')
 cache_dir = os.path.join(plugins_dir, 'cache')
-now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+manifest_path = os.path.join(os.environ.get('MANIFEST_PATH', os.path.join(os.getcwd(), 'plugin-manifest.json')))
 
+with open(manifest_path) as f:
+    manifest = json.load(f)
+
+now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
 marketplaces = manifest['marketplaces']
 plugins = manifest['plugins']
 
-print('=== 1. 同步 Marketplaces ===')
+# --- 1. 克隆/更新 marketplaces ---
+header('1. 同步 Marketplaces')
 for name, repo in marketplaces.items():
     dest = os.path.join(marketplaces_dir, name)
     if os.path.isdir(dest):
-        print(f'  ✓ {name} 已存在，拉取更新...')
+        ok(f'{name} {DIM}(pull){RESET}')
         subprocess.run(['git', '-C', dest, 'pull', '--ff-only'], capture_output=True)
     else:
-        print(f'  → 克隆 {repo} ...')
-        subprocess.run(['git', 'clone', f'https://github.com/{repo}.git', dest], check=True)
+        info(f'克隆 {BOLD}{repo}{RESET} ...')
+        ret = subprocess.run(['git', 'clone', '--depth=1', f'https://github.com/{repo}.git', dest],
+                             capture_output=True, text=True)
+        if ret.returncode == 0:
+            ok(name)
+        else:
+            fail(f'{name}: {ret.stderr.strip()}')
 
-print('=== 2. 生成 known_marketplaces.json ===')
+# --- 2. 生成 known_marketplaces.json ---
+header('2. 生成 known_marketplaces.json')
 known = {}
 for name, repo in marketplaces.items():
     path = os.path.join(marketplaces_dir, name)
@@ -106,49 +140,119 @@ for name, repo in marketplaces.items():
         }
 with open(os.path.join(plugins_dir, 'known_marketplaces.json'), 'w') as f:
     json.dump(known, f, indent=2)
-print(f'  ✓ {len(known)} 个 marketplace')
+ok(f'{len(known)} 个 marketplace')
 
-print('=== 3. 安装插件到 cache ===')
+# --- 3. 安装插件到 cache ---
+header('3. 安装插件')
 
 def find_plugin_source(plugin_name, marketplace):
+    """在 marketplace 目录中搜索插件源码，支持多种目录结构"""
     mp_dir = os.path.join(marketplaces_dir, marketplace)
+    if not os.path.isdir(mp_dir):
+        return None
+
+    # 情况 A: marketplace 本身就是单插件仓库
     pj = os.path.join(mp_dir, '.claude-plugin', 'plugin.json')
     if os.path.isfile(pj):
         with open(pj) as f:
             meta = json.load(f)
         if meta.get('name') == plugin_name:
             return mp_dir
-    candidate = os.path.join(mp_dir, 'plugins', plugin_name)
-    if os.path.isdir(candidate):
-        return candidate
+
+    # 情况 B: 在多个常见子目录中查找
+    for sub in ('plugins', 'external_plugins', 'packages'):
+        candidate = os.path.join(mp_dir, sub, plugin_name)
+        if os.path.isdir(candidate):
+            return candidate
+
+    # 情况 C: marketplace.json 中声明 - 本地路径或外部 git 仓库
     mj = os.path.join(mp_dir, '.claude-plugin', 'marketplace.json')
     if os.path.isfile(mj):
         with open(mj) as f:
             mkt = json.load(f)
         for p in mkt.get('plugins', []):
             if p.get('name') == plugin_name:
-                return os.path.join(mp_dir, p.get('path', f'plugins/{plugin_name}'))
+                # 有本地 path 的情况
+                if 'path' in p:
+                    found = os.path.join(mp_dir, p['path'])
+                    if os.path.isdir(found):
+                        return found
+                # 外部 git source 的情况 (如 superpowers)
+                source = p.get('source', {})
+                if source.get('source') == 'url' and source.get('url'):
+                    url = source['url']
+                    sha = source.get('sha', '')
+                    clone_dest = os.path.join(cache_dir, marketplace, plugin_name, '__src')
+                    if not os.path.isdir(clone_dest):
+                        info(f'克隆外部插件 {BOLD}{plugin_name}{RESET} ...')
+                        ret = subprocess.run(
+                            ['git', 'clone', '--depth=1', url, clone_dest],
+                            capture_output=True, text=True)
+                        if ret.returncode != 0:
+                            return None
+                        if sha:
+                            subprocess.run(
+                                ['git', '-C', clone_dest, 'fetch', '--depth=1', 'origin', sha],
+                                capture_output=True)
+                            subprocess.run(
+                                ['git', '-C', clone_dest, 'checkout', sha],
+                                capture_output=True)
+                    return clone_dest
+
+    # 情况 D: 递归搜索 .claude-plugin/plugin.json
+    for root, dirs, files in os.walk(mp_dir):
+        pj_path = os.path.join(root, '.claude-plugin', 'plugin.json')
+        if os.path.isfile(pj_path):
+            try:
+                with open(pj_path) as f:
+                    meta = json.load(f)
+                if meta.get('name') == plugin_name:
+                    return root
+            except Exception:
+                pass
+        dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules', '__pycache__')]
+
     return None
 
+def copy_plugin(src, dest):
+    """复制插件目录，跳过 .git"""
+    os.makedirs(dest, exist_ok=True)
+    for item in os.scandir(src):
+        if item.name == '.git':
+            continue
+        d = os.path.join(dest, item.name)
+        if item.is_dir(follow_symlinks=False):
+            shutil.copytree(item.path, d, dirs_exist_ok=True,
+                           ignore=shutil.ignore_patterns('.git'))
+        else:
+            shutil.copy2(item.path, d)
+
 installed_plugins = {}
+failed = []
+
 for p in plugins:
     name, marketplace = p['name'], p['marketplace']
     version = p.get('version', 'unknown')
 
     src = find_plugin_source(name, marketplace)
     if not src:
-        print(f'  ⚠ {name} ({marketplace}) 未找到源码，跳过')
+        warn(f'{name} {DIM}({marketplace}) 未找到源码{RESET}')
+        failed.append(name)
         continue
 
     dest = os.path.join(cache_dir, marketplace, name, version)
-    os.makedirs(dest, exist_ok=True)
-    subprocess.run(['cp', '-R', f'{src}/.', dest], check=True)
+    try:
+        copy_plugin(src, dest)
+    except Exception as e:
+        fail(f'{name}: {e}')
+        failed.append(name)
+        continue
 
     sha = ''
     try:
         sha = subprocess.check_output(
             ['git', 'rev-parse', 'HEAD'],
-            cwd=os.path.join(marketplaces_dir, marketplace),
+            cwd=src if os.path.isdir(os.path.join(src, '.git')) else os.path.join(marketplaces_dir, marketplace),
             stderr=subprocess.DEVNULL
         ).decode().strip()
     except Exception:
@@ -165,22 +269,31 @@ for p in plugins:
     if sha:
         entry['gitCommitSha'] = sha
     installed_plugins[key] = [entry]
-    print(f'  ✓ {name}')
+    ok(name)
 
-print('=== 4. 生成 installed_plugins.json ===')
+# --- 4. 生成 installed_plugins.json ---
+header('4. 生成 installed_plugins.json')
 with open(os.path.join(plugins_dir, 'installed_plugins.json'), 'w') as f:
     json.dump({'version': 2, 'plugins': installed_plugins}, f, indent=2)
-print(f'  ✓ {len(installed_plugins)} 个插件已注册')
+ok(f'{len(installed_plugins)} 个插件已注册')
+
+# --- 汇总 ---
 print()
-print('完成！请在 Claude Code 中运行 /reload-plugins')
-" "$MANIFEST"
+if failed:
+    msg = ', '.join(failed)
+    print(f'{YELLOW}⚠ {len(failed)} 个插件未能安装: {msg}{RESET}')
+    print()
+print(f'{GREEN}{BOLD}完成！{RESET}请在 Claude Code 中运行 {BOLD}/reload-plugins{RESET}')
+PYTHON
 }
 
 case "${1:-install}" in
   export)
+    export MANIFEST_PATH="$MANIFEST"
     do_export
     ;;
   install|"")
+    export MANIFEST_PATH="$MANIFEST"
     do_install
     ;;
   *)
