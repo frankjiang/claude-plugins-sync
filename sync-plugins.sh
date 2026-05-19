@@ -108,9 +108,11 @@ for key, entries in installed.get('plugins', {}).items():
                                 git_url = src['url']
                             break
 
+    # 独立 git 插件归入 claude-plugins-sync marketplace
+    effective_marketplace = 'claude-plugins-sync' if git_url else marketplace
     plugins.append({
         'name': plugin_name,
-        'marketplace': marketplace,
+        'marketplace': effective_marketplace,
         'version': entry.get('version', 'unknown'),
         'scope': 'user',
         'git_url': git_url,
@@ -126,6 +128,20 @@ if os.path.isfile(settings_path):
     enabled_plugins = settings.get('enabledPlugins', {})
     extra_marketplaces = settings.get('extraKnownMarketplaces', {})
 
+# 同步 enabledPlugins 中的 key: 旧格式 name@name -> 新格式 name@claude-plugins-sync
+git_plugin_names = {p['name'] for p in plugins if p.get('git_url')}
+updated_enabled = {}
+for key, val in enabled_plugins.items():
+    pname, mkt = key.split('@', 1) if '@' in key else (key, '')
+    if pname in git_plugin_names and mkt != 'claude-plugins-sync':
+        updated_enabled[f'{pname}@claude-plugins-sync'] = val
+    else:
+        updated_enabled[key] = val
+enabled_plugins = updated_enabled
+
+# 将本 repo (claude-plugins-sync) 加入 marketplaces
+real_marketplaces['claude-plugins-sync'] = 'frankjiang/claude-plugins-sync'
+
 manifest = {
     'version': 2,
     'marketplaces': real_marketplaces,
@@ -136,10 +152,35 @@ manifest = {
 out = os.environ['MANIFEST_PATH']
 with open(out, 'w') as f:
     json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+# 同步更新 .claude-plugin/marketplace.json (列出所有独立 git 插件)
+script_dir = os.path.dirname(out)
+mkt_json_path = os.path.join(script_dir, '.claude-plugin', 'marketplace.json')
+git_plugins = [p for p in plugins if p.get('git_url')]
+mkt_plugins = []
+for p in git_plugins:
+    mkt_plugins.append({
+        'name': p['name'],
+        'description': p['name'],
+        'source': {
+            'source': 'git-subdir',
+            'url': p['git_url'],
+            'path': '.',
+            'ref': 'main',
+        }
+    })
+mkt_data = {
+    'name': 'claude-plugins-sync',
+    'description': 'Proxy marketplace for third-party standalone plugins',
+    'plugins': mkt_plugins,
+}
+os.makedirs(os.path.dirname(mkt_json_path), exist_ok=True)
+with open(mkt_json_path, 'w') as f:
+    json.dump(mkt_data, f, indent=2, ensure_ascii=False)
+
 print(f'\033[32m✓\033[0m 已导出 \033[1m{len(plugins)}\033[0m 个插件到 {out}')
 print(f'  Marketplaces: {len(real_marketplaces)} 个')
-git_plugins = [p for p in plugins if p.get("git_url")]
-print(f'  独立 Git 插件: {len(git_plugins)} 个')
+print(f'  独立 Git 插件: {len(git_plugins)} 个 (via claude-plugins-sync marketplace)')
 print(f'  启用的插件: {len(enabled_plugins)} 个')
 PYTHON
 }
@@ -223,10 +264,22 @@ now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
 marketplaces = manifest.get('marketplaces', {})
 plugins = manifest.get('plugins', [])
 
-# --- 1. 同步真正的 Marketplaces (有 marketplace.json 的仓库) ---
+# --- 1. 同步 Marketplaces ---
 header('1. 同步 Marketplaces')
+script_dir = os.path.dirname(manifest_path)
 for name, repo in marketplaces.items():
     dest = os.path.join(marketplaces_dir, name)
+    # claude-plugins-sync 就是本脚本所在的仓库，直接复制 .claude-plugin/
+    if name == 'claude-plugins-sync':
+        src_mj = os.path.join(script_dir, '.claude-plugin', 'marketplace.json')
+        dest_mj = os.path.join(dest, '.claude-plugin', 'marketplace.json')
+        if os.path.isfile(src_mj):
+            os.makedirs(os.path.dirname(dest_mj), exist_ok=True)
+            shutil.copy2(src_mj, dest_mj)
+            ok(f'{name} {DIM}(本地){RESET}')
+        else:
+            fail(f'{name}: 缺少 .claude-plugin/marketplace.json')
+        continue
     if os.path.isdir(dest):
         ok(f'{name} {DIM}(pull){RESET}')
         git_pull(dest)
@@ -238,56 +291,37 @@ for name, repo in marketplaces.items():
         else:
             fail(f'{name}: {err}')
 
-# --- 2. 克隆独立 Git 插件仓库，安装到 marketplaces 并生成 marketplace.json ---
-header('2. 同步独立 Git 插件')
+# --- 2. 克隆独立 Git 插件源码 ---
+header('2. 同步独立 Git 插件源码')
 git_plugins = [p for p in plugins if p.get('git_url')]
+sources_dir = os.path.join(plugins_dir, 'sources')
 git_sources = {}  # plugin_name -> clone path
 
 if not git_plugins:
     ok('无')
 else:
+    os.makedirs(sources_dir, exist_ok=True)
     for p in git_plugins:
         name = p['name']
         url = p['git_url']
-        # 克隆到 marketplaces 目录 (Claude Code 从这里加载)
-        dest = os.path.join(marketplaces_dir, name)
+        dest = os.path.join(sources_dir, name)
         if os.path.isdir(dest):
             ok(f'{name} {DIM}(pull){RESET}')
             git_pull(dest)
         else:
             info(f'克隆 {BOLD}{name}{RESET} ...')
-            os.makedirs(marketplaces_dir, exist_ok=True)
             success, err = git_clone(url, dest)
             if success:
                 ok(name)
             else:
                 fail(f'{name}: {err}')
                 continue
-        # 确保有 marketplace.json (Claude Code 加载 marketplace 时必需)
-        mj = os.path.join(dest, '.claude-plugin', 'marketplace.json')
-        pj = os.path.join(dest, '.claude-plugin', 'plugin.json')
-        if not os.path.isfile(mj) and os.path.isfile(pj):
-            with open(pj) as f:
-                meta = json.load(f)
-            plugin_name = meta.get('name', name)
-            mkt_data = {
-                'name': name,
-                'plugins': [{
-                    'name': plugin_name,
-                    'source': './',
-                    'description': meta.get('description', plugin_name)
-                }]
-            }
-            os.makedirs(os.path.dirname(mj), exist_ok=True)
-            with open(mj, 'w') as f:
-                json.dump(mkt_data, f, indent=2)
-            ok(f'{name} {DIM}(生成 marketplace.json){RESET}')
         git_sources[name] = dest
 
 # --- 3. 生成 known_marketplaces.json ---
 header('3. 生成 known_marketplaces.json')
 known = {}
-# 真正的 marketplace (GitHub 源)
+# 所有 marketplace (包括 claude-plugins-sync 本身) 统一用 source: github
 for name, repo in marketplaces.items():
     path = os.path.join(marketplaces_dir, name)
     if os.path.isdir(path):
@@ -296,28 +330,9 @@ for name, repo in marketplaces.items():
             'installLocation': path,
             'lastUpdated': now,
         }
-# 独立 Git 插件: 也需要注册到 known_marketplaces (source 字段必需)
-# Claude Code 会尝试从 GitHub 验证 marketplace.json，找不到时显示 warning
-# 但插件本身仍通过 installed_plugins.json + enabledPlugins + 本地 cache 正常加载
-for name, path in git_sources.items():
-    if name not in known:
-        # 从 manifest 中获取 git_url 推导 repo
-        repo = ''
-        for p in plugins:
-            if p['name'] == name and p.get('git_url'):
-                url = p['git_url']
-                # https://github.com/user/repo.git -> user/repo
-                repo = url.replace('https://github.com/', '').replace('.git', '')
-                break
-        if repo:
-            known[name] = {
-                'source': {'source': 'github', 'repo': repo},
-                'installLocation': path,
-                'lastUpdated': now,
-            }
 with open(os.path.join(plugins_dir, 'known_marketplaces.json'), 'w') as f:
     json.dump(known, f, indent=2)
-ok(f'{len(known)} 个 ({len(marketplaces)} marketplace + {len(git_sources)} 独立插件)')
+ok(f'{len(known)} 个 marketplace')
 
 # --- 4. 安装插件到 cache ---
 header('4. 安装插件')

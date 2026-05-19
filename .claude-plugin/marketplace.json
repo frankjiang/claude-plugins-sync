@@ -1,0 +1,16 @@
+{
+  "name": "claude-plugins-sync",
+  "description": "Proxy marketplace for third-party standalone plugins",
+  "plugins": [
+    {
+      "name": "mattpocock-skills",
+      "description": "mattpocock-skills",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/mattpocock/skills.git",
+        "path": ".",
+        "ref": "main"
+      }
+    }
+  ]
+}
