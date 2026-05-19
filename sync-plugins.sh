@@ -296,12 +296,18 @@ for name, repo in marketplaces.items():
             'installLocation': path,
             'lastUpdated': now,
         }
-# 独立 Git 插件不注册到 known_marketplaces.json
-# Claude Code 的 "source: github" 会强制从 GitHub API 验证 marketplace.json
-# 第三方仓库没有此文件会报错，但不影响插件加载 (通过 installed_plugins.json + enabledPlugins 生效)
+# 独立 Git 插件: 只注册 installLocation (不带 source 字段)
+# 带 source: github 会触发 GitHub API 验证 marketplace.json，第三方单插件仓库没有此文件会报错
+# 不带 source 字段则 Claude Code 直接读取本地 marketplace.json，跳过远程验证
+for name, path in git_sources.items():
+    if name not in known:
+        known[name] = {
+            'installLocation': path,
+            'lastUpdated': now,
+        }
 with open(os.path.join(plugins_dir, 'known_marketplaces.json'), 'w') as f:
     json.dump(known, f, indent=2)
-ok(f'{len(known)} 个 ({len(marketplaces)} marketplace + {len(git_plugins)} 独立插件)')
+ok(f'{len(known)} 个 ({len(marketplaces)} marketplace + {len(git_sources)} 独立插件)')
 
 # --- 4. 安装插件到 cache ---
 header('4. 安装插件')
