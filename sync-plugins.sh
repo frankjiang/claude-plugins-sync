@@ -269,13 +269,18 @@ for name, repo in marketplaces.items():
             'installLocation': path,
             'lastUpdated': now,
         }
-# 独立 Git 插件 - 用 local source 避免 Claude Code 去 GitHub 验证
+# 独立 Git 插件 - 同样用 github source，本地已有 marketplace.json
 for p in git_plugins:
     name = p['name']
+    url = p.get('git_url', '')
+    # 从 git_url 推断 GitHub repo (https://github.com/owner/repo.git -> owner/repo)
+    repo = ''
+    if 'github.com/' in url:
+        repo = url.split('github.com/')[-1].removesuffix('.git')
     path = os.path.join(marketplaces_dir, name)
-    if os.path.isdir(path):
+    if os.path.isdir(path) and repo:
         known[name] = {
-            'source': {'source': 'local'},
+            'source': {'source': 'github', 'repo': repo},
             'installLocation': path,
             'lastUpdated': now,
         }
