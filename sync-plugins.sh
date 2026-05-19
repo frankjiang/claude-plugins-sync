@@ -269,21 +269,9 @@ for name, repo in marketplaces.items():
             'installLocation': path,
             'lastUpdated': now,
         }
-# 独立 Git 插件 - 同样用 github source，本地已有 marketplace.json
-for p in git_plugins:
-    name = p['name']
-    url = p.get('git_url', '')
-    # 从 git_url 推断 GitHub repo (https://github.com/owner/repo.git -> owner/repo)
-    repo = ''
-    if 'github.com/' in url:
-        repo = url.split('github.com/')[-1].removesuffix('.git')
-    path = os.path.join(marketplaces_dir, name)
-    if os.path.isdir(path) and repo:
-        known[name] = {
-            'source': {'source': 'github', 'repo': repo},
-            'installLocation': path,
-            'lastUpdated': now,
-        }
+# 独立 Git 插件不注册到 known_marketplaces.json
+# (Claude Code 会去 GitHub 验证 marketplace.json，而这些仓库没有该文件)
+# 它们只通过 installed_plugins.json + cache 加载，功能不受影响
 with open(os.path.join(plugins_dir, 'known_marketplaces.json'), 'w') as f:
     json.dump(known, f, indent=2)
 ok(f'{len(known)} 个 ({len(marketplaces)} marketplace + {len(git_plugins)} 独立插件)')
