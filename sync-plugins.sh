@@ -383,6 +383,33 @@ with open(os.path.join(plugins_dir, 'installed_plugins.json'), 'w') as f:
     json.dump({'version': 2, 'plugins': installed_plugins}, f, indent=2)
 ok(f'{len(installed_plugins)} 个插件已注册')
 
+# --- 6. 更新 plugin-catalog-cache.json (标记已安装) ---
+catalog_path = os.path.join(plugins_dir, 'plugin-catalog-cache.json')
+if os.path.isfile(catalog_path):
+    header('6. 更新插件目录缓存')
+    try:
+        with open(catalog_path) as f:
+            catalog = json.load(f)
+        catalog_plugins = catalog.get('catalog', {}).get('plugins', {})
+        updated = 0
+        for key in installed_plugins:
+            if key in catalog_plugins:
+                catalog_plugins[key]['installed'] = True
+                updated += 1
+            else:
+                # 不在 catalog 中的插件 (如独立 git 插件)，添加条目
+                plugin_name = key.split('@')[0]
+                catalog_plugins[key] = {
+                    'name': plugin_name,
+                    'installed': True,
+                }
+                updated += 1
+        with open(catalog_path, 'w') as f:
+            json.dump(catalog, f, indent=2)
+        ok(f'{updated} 个插件标记为已安装')
+    except Exception as e:
+        warn(f'更新缓存失败: {e}')
+
 # --- 汇总 ---
 print()
 if failed:
