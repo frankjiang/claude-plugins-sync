@@ -9,7 +9,7 @@
       "name": "code-review",
       "marketplace": "claude-plugins-official",
       "version": "unknown",
-      "scope": "project",
+      "scope": "user",
       "git_url": ""
     },
     {

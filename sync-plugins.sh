@@ -51,17 +51,35 @@ for key, entries in installed.get('plugins', {}).items():
         continue
     seen.add(key)
     plugin_name, marketplace = key.split('@', 1)
-    entry = entries[0]
+    # 优先选取 scope=user 的条目 (跨机器同步不依赖 projectPath)
+    entry = next((e for e in entries if e.get('scope') == 'user'), entries[0])
 
     # 判断插件来源: 是否来自真正的 marketplace，还是独立 git 仓库
     git_url = ''
     if marketplace not in real_marketplaces:
-        # 非 marketplace 的插件 - 从 known_marketplaces 获取 git repo
-        if marketplace in known:
+        # 尝试多个位置获取 git remote URL
+        import subprocess
+        search_paths = [
+            os.path.join(marketplaces_dir, marketplace),
+            os.path.join(plugins_dir, 'sources', plugin_name),
+        ]
+        for sp in search_paths:
+            if os.path.isdir(os.path.join(sp, '.git')):
+                try:
+                    url = subprocess.check_output(
+                        ['git', '-C', sp, 'remote', 'get-url', 'origin'],
+                        stderr=subprocess.DEVNULL).decode().strip()
+                    if url:
+                        git_url = url
+                        break
+                except Exception:
+                    pass
+        # 从 known_marketplaces 获取
+        if not git_url and marketplace in known:
             repo = known[marketplace].get('source', {}).get('repo', '')
             if repo:
                 git_url = f'https://github.com/{repo}.git'
-        # 也可能是 marketplace.json 中声明的外部 url
+        # 从其他 marketplace 的 marketplace.json 中查找外部 url 声明
         if not git_url:
             for mk_name, mk_info in known.items():
                 mk_dir = mk_info.get('installLocation', '')
@@ -80,7 +98,7 @@ for key, entries in installed.get('plugins', {}).items():
         'name': plugin_name,
         'marketplace': marketplace,
         'version': entry.get('version', 'unknown'),
-        'scope': entry.get('scope', 'user'),
+        'scope': 'user',
         'git_url': git_url,
     })
 
@@ -193,7 +211,7 @@ for name, repo in marketplaces.items():
         else:
             fail(f'{name}: {err}')
 
-# --- 2. 克隆独立 Git 插件仓库 (没有 marketplace.json 的) ---
+# --- 2. 克隆独立 Git 插件仓库，安装到 marketplaces 并生成 marketplace.json ---
 header('2. 同步独立 Git 插件')
 git_plugins = [p for p in plugins if p.get('git_url')]
 git_sources = {}  # plugin_name -> clone path
@@ -204,25 +222,45 @@ else:
     for p in git_plugins:
         name = p['name']
         url = p['git_url']
-        # 克隆到专门的 sources 目录，不放入 marketplaces
-        src_dir = os.path.join(plugins_dir, 'sources', name)
-        if os.path.isdir(src_dir):
+        # 克隆到 marketplaces 目录 (Claude Code 从这里加载)
+        dest = os.path.join(marketplaces_dir, name)
+        if os.path.isdir(dest):
             ok(f'{name} {DIM}(pull){RESET}')
-            git_pull(src_dir)
+            git_pull(dest)
         else:
             info(f'克隆 {BOLD}{name}{RESET} ...')
-            os.makedirs(os.path.dirname(src_dir), exist_ok=True)
-            success, err = git_clone(url, src_dir)
+            os.makedirs(marketplaces_dir, exist_ok=True)
+            success, err = git_clone(url, dest)
             if success:
                 ok(name)
             else:
                 fail(f'{name}: {err}')
                 continue
-        git_sources[name] = src_dir
+        # 确保有 marketplace.json (Claude Code 加载 marketplace 时必需)
+        mj = os.path.join(dest, '.claude-plugin', 'marketplace.json')
+        pj = os.path.join(dest, '.claude-plugin', 'plugin.json')
+        if not os.path.isfile(mj) and os.path.isfile(pj):
+            with open(pj) as f:
+                meta = json.load(f)
+            plugin_name = meta.get('name', name)
+            mkt_data = {
+                'name': name,
+                'plugins': [{
+                    'name': plugin_name,
+                    'source': './',
+                    'description': meta.get('description', plugin_name)
+                }]
+            }
+            os.makedirs(os.path.dirname(mj), exist_ok=True)
+            with open(mj, 'w') as f:
+                json.dump(mkt_data, f, indent=2)
+            ok(f'{name} {DIM}(生成 marketplace.json){RESET}')
+        git_sources[name] = dest
 
-# --- 3. 生成 known_marketplaces.json (只包含真正的 marketplace) ---
+# --- 3. 生成 known_marketplaces.json ---
 header('3. 生成 known_marketplaces.json')
 known = {}
+# 真正的 marketplace (GitHub 源)
 for name, repo in marketplaces.items():
     path = os.path.join(marketplaces_dir, name)
     if os.path.isdir(path):
@@ -231,9 +269,19 @@ for name, repo in marketplaces.items():
             'installLocation': path,
             'lastUpdated': now,
         }
+# 独立 Git 插件 - 用 local source 避免 Claude Code 去 GitHub 验证
+for p in git_plugins:
+    name = p['name']
+    path = os.path.join(marketplaces_dir, name)
+    if os.path.isdir(path):
+        known[name] = {
+            'source': {'source': 'local'},
+            'installLocation': path,
+            'lastUpdated': now,
+        }
 with open(os.path.join(plugins_dir, 'known_marketplaces.json'), 'w') as f:
     json.dump(known, f, indent=2)
-ok(f'{len(known)} 个 marketplace')
+ok(f'{len(known)} 个 ({len(marketplaces)} marketplace + {len(git_plugins)} 独立插件)')
 
 # --- 4. 安装插件到 cache ---
 header('4. 安装插件')
