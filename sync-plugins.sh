@@ -102,10 +102,22 @@ for key, entries in installed.get('plugins', {}).items():
         'git_url': git_url,
     })
 
+# 读取 settings.json 中的 enabledPlugins 和 extraKnownMarketplaces
+settings_path = os.path.join(os.path.expanduser('~/.claude'), 'settings.json')
+enabled_plugins = {}
+extra_marketplaces = {}
+if os.path.isfile(settings_path):
+    with open(settings_path) as f:
+        settings = json.load(f)
+    enabled_plugins = settings.get('enabledPlugins', {})
+    extra_marketplaces = settings.get('extraKnownMarketplaces', {})
+
 manifest = {
     'version': 2,
     'marketplaces': real_marketplaces,
     'plugins': plugins,
+    'enabledPlugins': enabled_plugins,
+    'extraKnownMarketplaces': extra_marketplaces,
 }
 out = os.environ['MANIFEST_PATH']
 with open(out, 'w') as f:
@@ -114,6 +126,7 @@ print(f'\033[32m✓\033[0m 已导出 \033[1m{len(plugins)}\033[0m 个插件到 {
 print(f'  Marketplaces: {len(real_marketplaces)} 个')
 git_plugins = [p for p in plugins if p.get("git_url")]
 print(f'  独立 Git 插件: {len(git_plugins)} 个')
+print(f'  启用的插件: {len(enabled_plugins)} 个')
 PYTHON
 }
 
@@ -383,32 +396,33 @@ with open(os.path.join(plugins_dir, 'installed_plugins.json'), 'w') as f:
     json.dump({'version': 2, 'plugins': installed_plugins}, f, indent=2)
 ok(f'{len(installed_plugins)} 个插件已注册')
 
-# --- 6. 更新 plugin-catalog-cache.json (标记已安装) ---
-catalog_path = os.path.join(plugins_dir, 'plugin-catalog-cache.json')
-if os.path.isfile(catalog_path):
-    header('6. 更新插件目录缓存')
-    try:
-        with open(catalog_path) as f:
-            catalog = json.load(f)
-        catalog_plugins = catalog.get('catalog', {}).get('plugins', {})
-        updated = 0
-        for key in installed_plugins:
-            if key in catalog_plugins:
-                catalog_plugins[key]['installed'] = True
-                updated += 1
-            else:
-                # 不在 catalog 中的插件 (如独立 git 插件)，添加条目
-                plugin_name = key.split('@')[0]
-                catalog_plugins[key] = {
-                    'name': plugin_name,
-                    'installed': True,
-                }
-                updated += 1
-        with open(catalog_path, 'w') as f:
-            json.dump(catalog, f, indent=2)
-        ok(f'{updated} 个插件标记为已安装')
-    except Exception as e:
-        warn(f'更新缓存失败: {e}')
+# --- 6. 更新 settings.json (enabledPlugins + extraKnownMarketplaces) ---
+header('6. 更新 settings.json')
+settings_path = os.path.join(home, '.claude', 'settings.json')
+settings = {}
+if os.path.isfile(settings_path):
+    with open(settings_path) as f:
+        settings = json.load(f)
+
+# 合并 enabledPlugins (manifest 中的 + 已安装的全部启用)
+enabled = settings.get('enabledPlugins', {})
+manifest_enabled = manifest.get('enabledPlugins', {})
+for key in installed_plugins:
+    enabled[key] = True
+for key, val in manifest_enabled.items():
+    enabled[key] = val
+settings['enabledPlugins'] = enabled
+
+# 合并 extraKnownMarketplaces
+extra_mkt = manifest.get('extraKnownMarketplaces', {})
+if extra_mkt:
+    existing_extra = settings.get('extraKnownMarketplaces', {})
+    existing_extra.update(extra_mkt)
+    settings['extraKnownMarketplaces'] = existing_extra
+
+with open(settings_path, 'w') as f:
+    json.dump(settings, f, indent=2)
+ok(f'{len(enabled)} 个插件已启用')
 
 # --- 汇总 ---
 print()
