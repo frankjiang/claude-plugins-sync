@@ -108,8 +108,8 @@ for key, entries in installed.get('plugins', {}).items():
                                 git_url = src['url']
                             break
 
-    # 独立 git 插件归入 claude-plugins-sync marketplace
-    effective_marketplace = 'claude-plugins-sync' if git_url else marketplace
+    # 独立 git 插件归入 claude-plugins-official (唯一可靠加载的 marketplace)
+    effective_marketplace = 'claude-plugins-official' if git_url else marketplace
     plugins.append({
         'name': plugin_name,
         'marketplace': effective_marketplace,
@@ -128,19 +128,16 @@ if os.path.isfile(settings_path):
     enabled_plugins = settings.get('enabledPlugins', {})
     extra_marketplaces = settings.get('extraKnownMarketplaces', {})
 
-# 同步 enabledPlugins 中的 key: 旧格式 name@name -> 新格式 name@claude-plugins-sync
+# 同步 enabledPlugins: 旧格式 name@name / name@claude-plugins-sync -> name@claude-plugins-official
 git_plugin_names = {p['name'] for p in plugins if p.get('git_url')}
 updated_enabled = {}
 for key, val in enabled_plugins.items():
     pname, mkt = key.split('@', 1) if '@' in key else (key, '')
-    if pname in git_plugin_names and mkt != 'claude-plugins-sync':
-        updated_enabled[f'{pname}@claude-plugins-sync'] = val
+    if pname in git_plugin_names and mkt != 'claude-plugins-official':
+        updated_enabled[f'{pname}@claude-plugins-official'] = val
     else:
         updated_enabled[key] = val
 enabled_plugins = updated_enabled
-
-# 将本 repo (claude-plugins-sync) 加入 marketplaces
-real_marketplaces['claude-plugins-sync'] = 'frankjiang/claude-plugins-sync'
 
 manifest = {
     'version': 2,
@@ -153,34 +150,10 @@ out = os.environ['MANIFEST_PATH']
 with open(out, 'w') as f:
     json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-# 同步更新 .claude-plugin/marketplace.json (列出所有独立 git 插件)
-script_dir = os.path.dirname(out)
-mkt_json_path = os.path.join(script_dir, '.claude-plugin', 'marketplace.json')
 git_plugins = [p for p in plugins if p.get('git_url')]
-mkt_plugins = []
-for p in git_plugins:
-    mkt_plugins.append({
-        'name': p['name'],
-        'description': p['name'],
-        'source': {
-            'source': 'git-subdir',
-            'url': p['git_url'],
-            'path': '.',
-            'ref': 'main',
-        }
-    })
-mkt_data = {
-    'name': 'claude-plugins-sync',
-    'description': 'Proxy marketplace for third-party standalone plugins',
-    'plugins': mkt_plugins,
-}
-os.makedirs(os.path.dirname(mkt_json_path), exist_ok=True)
-with open(mkt_json_path, 'w') as f:
-    json.dump(mkt_data, f, indent=2, ensure_ascii=False)
-
 print(f'\033[32m✓\033[0m 已导出 \033[1m{len(plugins)}\033[0m 个插件到 {out}')
 print(f'  Marketplaces: {len(real_marketplaces)} 个')
-print(f'  独立 Git 插件: {len(git_plugins)} 个 (via claude-plugins-sync marketplace)')
+print(f'  独立 Git 插件: {len(git_plugins)} 个 (注册到 claude-plugins-official)')
 print(f'  启用的插件: {len(enabled_plugins)} 个')
 PYTHON
 }
@@ -266,20 +239,8 @@ plugins = manifest.get('plugins', [])
 
 # --- 1. 同步 Marketplaces ---
 header('1. 同步 Marketplaces')
-script_dir = os.path.dirname(manifest_path)
 for name, repo in marketplaces.items():
     dest = os.path.join(marketplaces_dir, name)
-    # claude-plugins-sync 就是本脚本所在的仓库，直接复制 .claude-plugin/
-    if name == 'claude-plugins-sync':
-        src_mj = os.path.join(script_dir, '.claude-plugin', 'marketplace.json')
-        dest_mj = os.path.join(dest, '.claude-plugin', 'marketplace.json')
-        if os.path.isfile(src_mj):
-            os.makedirs(os.path.dirname(dest_mj), exist_ok=True)
-            shutil.copy2(src_mj, dest_mj)
-            ok(f'{name} {DIM}(本地){RESET}')
-        else:
-            fail(f'{name}: 缺少 .claude-plugin/marketplace.json')
-        continue
     if os.path.isdir(dest):
         ok(f'{name} {DIM}(pull){RESET}')
         git_pull(dest)
@@ -318,10 +279,32 @@ else:
                 continue
         git_sources[name] = dest
 
-# --- 3. 生成 known_marketplaces.json ---
-header('3. 生成 known_marketplaces.json')
+# --- 3. 注入独立插件到 claude-plugins-official marketplace.json ---
+header('3. 注入独立插件声明')
+official_mj = os.path.join(marketplaces_dir, 'claude-plugins-official', '.claude-plugin', 'marketplace.json')
+if os.path.isfile(official_mj) and git_plugins:
+    with open(official_mj) as f:
+        official_mp = json.load(f)
+    existing_names = {p['name'] for p in official_mp.get('plugins', [])}
+    added = 0
+    for p in git_plugins:
+        if p['name'] not in existing_names:
+            official_mp['plugins'].append({
+                'name': p['name'],
+                'description': p['name'],
+                'source': f'./plugins/{p["name"]}',
+            })
+            added += 1
+    if added:
+        with open(official_mj, 'w') as f:
+            json.dump(official_mp, f, indent=2)
+    ok(f'{added} 个插件已注入 claude-plugins-official')
+else:
+    ok('无需注入')
+
+# --- 4. 生成 known_marketplaces.json ---
+header('4. 生成 known_marketplaces.json')
 known = {}
-# 所有 marketplace (包括 claude-plugins-sync 本身) 统一用 source: github
 for name, repo in marketplaces.items():
     path = os.path.join(marketplaces_dir, name)
     if os.path.isdir(path):
@@ -334,8 +317,8 @@ with open(os.path.join(plugins_dir, 'known_marketplaces.json'), 'w') as f:
     json.dump(known, f, indent=2)
 ok(f'{len(known)} 个 marketplace')
 
-# --- 4. 安装插件到 cache ---
-header('4. 安装插件')
+# --- 5. 安装插件到 cache ---
+header('5. 安装插件')
 
 def find_plugin_source(plugin_name, marketplace, git_url):
     # 优先: 独立 Git 插件
@@ -435,14 +418,14 @@ for p in plugins:
     installed_plugins[key] = [entry]
     ok(name)
 
-# --- 5. 生成 installed_plugins.json ---
-header('5. 生成 installed_plugins.json')
+# --- 6. 生成 installed_plugins.json ---
+header('6. 生成 installed_plugins.json')
 with open(os.path.join(plugins_dir, 'installed_plugins.json'), 'w') as f:
     json.dump({'version': 2, 'plugins': installed_plugins}, f, indent=2)
 ok(f'{len(installed_plugins)} 个插件已注册')
 
-# --- 6. 更新 settings.json (enabledPlugins + extraKnownMarketplaces) ---
-header('6. 更新 settings.json')
+# --- 7. 更新 settings.json (enabledPlugins + extraKnownMarketplaces) ---
+header('7. 更新 settings.json')
 settings_path = os.path.join(home, '.claude', 'settings.json')
 settings = {}
 if os.path.isfile(settings_path):
